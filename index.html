@@ -867,6 +867,19 @@ header::after{content:'';position:absolute;top:-50px;right:-80px;width:220px;hei
   .rpt-cot-card{page-break-inside:avoid;}
 }
 
+
+/* ── Job card avance ── */
+.job-avance{margin-top:.3rem;}
+.job-avance-bar{height:5px;background:#ddd;border-radius:3px;overflow:hidden;margin-bottom:.15rem;}
+.job-avance-fill{height:100%;border-radius:3px;transition:width .3s;}
+.job-avance-fill.done  {background:#22c55e;}
+.job-avance-fill.high  {background:#84cc16;}
+.job-avance-fill.mid   {background:#f59e0b;}
+.job-avance-fill.low   {background:#ef4444;}
+.job-avance-text{display:flex;justify-content:space-between;font-size:.62rem;color:var(--muted);}
+.job-avance-text strong{color:var(--text);}
+.job-m2-processed{font-size:.65rem;color:var(--muted);margin-top:.1rem;}
+
 /* ══ ANIMATIONS ══ */
 @keyframes slideIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 @keyframes bounce{0%,80%,100%{transform:scale(.7);opacity:.4}40%{transform:scale(1);opacity:1}}
@@ -1169,6 +1182,7 @@ header::after{content:'';position:absolute;top:-50px;right:-80px;width:220px;hei
     <span class="cal-title">CALENDARIO DE PRODUCCIÓN</span>
     <div class="cal-actions">
       <button class="print-week-btn" onclick="printCalendar()">🖨 Imprimir semana</button>
+      <button class="report-btn" onclick="printProduccionHoy()">🖨 Informe diario</button>
       <div class="week-nav">
         <button class="week-btn" onclick="changeWeek(-1)">&#8592;</button>
         <span class="week-label" id="weekLabel">—</span>
@@ -1828,6 +1842,11 @@ function parseListado(rows){
     cantidad:idx('cant'), descripcion:idx('descrip'),
     m2:idx('m2 tot','m2tot'), pct:idx('% de av','avance'),
     prioridad:idx('prioridad'), estado:idx('estado'),
+    m2Proc:idx('m2 procesado','m2proc'),
+    cantProc:idx('cantidad procesada','cant procesada','procesada de piezas'),
+    cantPlanta:idx('cantidad en planta','cant en planta','en planta'),
+    cantPorProc:idx('cantidad por procesar','por procesar'),
+    cantEntregada:idx('cantidad entregada','entregada'),
   };
   return rows.slice(1).map(r=>({
     color:r[C.color]||'', cliente:r[C.cliente]||'', remito:r[C.remito]||'',
@@ -1835,6 +1854,11 @@ function parseListado(rows){
     cantidad:parseFloat(r[C.cantidad])||0, descripcion:r[C.descripcion]||'',
     m2Totales:parseFloat(r[C.m2])||0, pct:parseFloat(r[C.pct])||0,
     prioridad:parseInt(r[C.prioridad])||0, estado:r[C.estado]||'',
+    m2Procesados:parseFloat(r[C.m2Proc])||0,
+    cantProcesada:parseFloat(r[C.cantProc])||0,
+    cantEnPlanta:parseFloat(r[C.cantPlanta])||0,
+    cantPorProcesar:parseFloat(r[C.cantPorProc])||0,
+    cantEntregada:parseFloat(r[C.cantEntregada])||0,
   })).filter(r=>r.cliente||r.descripcion);
 }
 
@@ -2025,13 +2049,29 @@ async function renderCalendar(){
         const cc=colorClass(g.color);
         const safeData=encodeURIComponent(JSON.stringify({...g, allRows:g.allRows}));
         const totalPiezas=g.allRows.reduce((s,r)=>s+(r.cantPiezas||r.cantTotal||0),0);
+        // Aggregate avance from all rows
+        const totalM2Job    = g.allRows.reduce((s,r)=>s+(r.m2Totales||r.m2||0),0);
+        const totalM2Proc   = g.allRows.reduce((s,r)=>s+(r.m2Procesados||0),0);
+        const avgPct        = g.allRows.reduce((s,r)=>s+(r.pct||0),0) / (g.allRows.length||1);
+        const pctDisp       = Math.min(100, Math.round(avgPct));
+        const fillCls       = pctDisp>=100?'done':pctDisp>=75?'high':pctDisp>=40?'mid':'low';
+        const cantEnPlanta  = g.allRows.reduce((s,r)=>s+(r.cantEnPlanta||0),0);
+
         html+=`<div class="job-card ${cc}" onclick="openModal('${safeData}')">
           <div class="job-color">${g.color||'—'}</div>
           <div class="job-cliente">${g.cliente||'—'}</div>
           ${g.remito?`<div class="job-remito">Rem. ${g.remito}</div>`:''}
           <div class="job-piezas">${g.piezasList.filter(Boolean).join(' · ')||'—'}</div>
-          ${totalPiezas?`<div class="job-cant">${totalPiezas} piezas</div>`:''}
+          ${totalPiezas?`<div class="job-cant">${totalPiezas} pzas${cantEnPlanta?' · '+cantEnPlanta+' en planta':''}</div>`:''}
           ${g.horneada?`<div class="job-horneada">Horneada ${g.horneada}</div>`:''}
+          ${pctDisp>0||totalM2Proc>0?`
+          <div class="job-avance">
+            <div class="job-avance-bar"><div class="job-avance-fill ${fillCls}" style="width:${pctDisp}%"></div></div>
+            <div class="job-avance-text">
+              <span>${totalM2Proc>0?totalM2Proc.toFixed(2)+' m² proc.':''}</span>
+              <strong>${pctDisp}%</strong>
+            </div>
+          </div>`:''}
         </div>`;
       }
       html+=`</div>`;
@@ -2058,12 +2098,24 @@ function openModal(encoded){
   // Table rows
   let tableRows='';
   rows.forEach((r,i)=>{
+    const pct = Math.min(100,r.pct||0);
+    const fillCls = pct>=100?'done':pct>=75?'high':pct>=40?'mid':'low';
     tableRows+=`<tr>
       <td class="seq">${i+1}</td>
       <td class="desc-col">${r.descripcion||'—'}</td>
       <td>${r.tipo||'—'}</td>
       <td style="text-align:right">${r.cantPiezas||r.cantTotal||'—'}</td>
       <td style="text-align:right">${r.m2?r.m2.toFixed(2):'—'}</td>
+      <td style="text-align:right">${r.m2Procesados?r.m2Procesados.toFixed(2):'—'}</td>
+      <td style="text-align:right">${r.cantEnPlanta||'—'}</td>
+      <td style="min-width:80px">
+        <div style="display:flex;align-items:center;gap:.3rem">
+          <div style="flex:1;height:6px;background:#eee;border-radius:3px;overflow:hidden">
+            <div style="height:100%;border-radius:3px;width:${pct}%;background:${pct>=100?'#22c55e':pct>=75?'#84cc16':pct>=40?'#f59e0b':'#ef4444'}"></div>
+          </div>
+          <span style="font-size:.72rem;font-weight:700;min-width:32px;text-align:right">${pct.toFixed(0)}%</span>
+        </div>
+      </td>
     </tr>`;
   });
 
@@ -4714,6 +4766,174 @@ async function printInventarioReport(){
     </div>`;
 
   openPrintWindow(html, 'Inventario — '+fecha);
+}
+
+
+// ── INFORME DIARIO DE PRODUCCIÓN ─────────────────────────────
+async function printProduccionHoy(){
+  const data    = await getPlan();
+  const listado = await getListado();
+  const hoy     = dateKey(new Date());
+  const fecha   = new Date().toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  // Get items planned for today
+  const byDate = {};
+  for(const item of data){
+    (byDate[item.fecha]=byDate[item.fecha]||[]).push(item);
+  }
+  const todayItems = byDate[hoy] || [];
+
+  // Group by color+remito+cliente
+  const grouped = {};
+  for(const item of todayItems){
+    const gk = item.color+'||'+item.remito+'||'+item.cliente;
+    if(!grouped[gk]) grouped[gk] = {...item, allRows:[]};
+    grouped[gk].allRows.push(item);
+  }
+
+  // Enrich with listado data (pct, m2Procesados, cantEnPlanta)
+  for(const gk of Object.keys(grouped)){
+    const g = grouped[gk];
+    g.allRows = g.allRows.map(row => {
+      const match = listado.find(l =>
+        l.remito === row.remito &&
+        l.descripcion?.toLowerCase() === row.descripcion?.toLowerCase()
+      ) || listado.find(l => l.remito === row.remito && l.color === row.color);
+      return match ? {...row, pct:match.pct, m2Procesados:match.m2Procesados,
+        cantEnPlanta:match.cantEnPlanta, m2Totales:match.m2Totales||row.m2} : row;
+    });
+  }
+
+  const groups = Object.values(grouped);
+  if(!groups.length){
+    // Show week instead
+    const weekItems = Object.values(byDate).flat();
+    if(!weekItems.length){ alert('No hay producción planificada para hoy ni esta semana.'); return; }
+    alert('No hay producción para hoy. Se mostrará la semana completa.');
+  }
+
+  const totalM2Hoy   = groups.reduce((s,g)=>s+g.allRows.reduce((ss,r)=>ss+(r.m2Totales||r.m2||0),0),0);
+  const totalM2Proc  = groups.reduce((s,g)=>s+g.allRows.reduce((ss,r)=>ss+(r.m2Procesados||0),0),0);
+  const totalPiezas  = groups.reduce((s,g)=>s+g.allRows.reduce((ss,r)=>ss+(r.cantPiezas||r.cantTotal||0),0),0);
+  const avgAvance    = groups.length ? groups.reduce((s,g)=>{
+    const a = g.allRows.reduce((ss,r)=>ss+(r.pct||0),0)/(g.allRows.length||1);
+    return s+a;
+  },0)/groups.length : 0;
+
+  let cardsHtml = '';
+  groups.forEach((g,idx)=>{
+    const totalM2G   = g.allRows.reduce((s,r)=>s+(r.m2Totales||r.m2||0),0);
+    const totalProcG = g.allRows.reduce((s,r)=>s+(r.m2Procesados||0),0);
+    const avgPctG    = g.allRows.reduce((s,r)=>s+(r.pct||0),0)/(g.allRows.length||1);
+    const pctG       = Math.min(100,Math.round(avgPctG));
+    const barColor   = pctG>=100?'#22c55e':pctG>=75?'#84cc16':pctG>=40?'#f59e0b':'#ef4444';
+
+    let rowsHtml = g.allRows.map((r,i)=>{
+      const pct = Math.min(100,r.pct||0);
+      const bc  = pct>=100?'#22c55e':pct>=75?'#84cc16':pct>=40?'#f59e0b':'#ef4444';
+      return `<tr style="${pct>=100?'background:#f0fdf4':''}">
+        <td>${i+1}</td>
+        <td>${r.descripcion||'—'}</td>
+        <td style="text-align:right">${r.cantPiezas||r.cantTotal||'—'}</td>
+        <td style="text-align:right">${r.m2Totales||r.m2?parseFloat(r.m2Totales||r.m2).toFixed(2):'—'}</td>
+        <td style="text-align:right;font-weight:700;color:#166534">${r.m2Procesados?r.m2Procesados.toFixed(2):'—'}</td>
+        <td style="text-align:right">${r.cantEnPlanta||'—'}</td>
+        <td style="min-width:100px">
+          <div style="display:flex;align-items:center;gap:.3rem">
+            <div style="flex:1;height:7px;background:#eee;border-radius:3px;overflow:hidden">
+              <div style="height:100%;border-radius:3px;width:${pct}%;background:${bc}"></div>
+            </div>
+            <strong style="font-size:.78rem;min-width:36px;text-align:right">${pct.toFixed(0)}%</strong>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    cardsHtml += `
+      <div style="border:1px solid #ddd;border-radius:10px;margin-bottom:1rem;overflow:hidden;page-break-inside:avoid">
+        <div style="background:#f8f8f8;padding:.7rem 1rem;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <strong style="font-size:1rem">${g.cliente||'—'}</strong>
+            <span style="font-size:.75rem;color:#888;margin-left:.5rem">${g.color||'—'} · Rem. ${g.remito||'—'}</span>
+          </div>
+          <div style="text-align:right">
+            <div style="display:flex;align-items:center;gap:.5rem">
+              <div style="width:100px;height:8px;background:#eee;border-radius:4px;overflow:hidden">
+                <div style="height:100%;background:${barColor};width:${pctG}%;border-radius:4px"></div>
+              </div>
+              <strong style="font-size:.9rem">${pctG}%</strong>
+            </div>
+            <div style="font-size:.7rem;color:#888;margin-top:.15rem">
+              ${totalProcG>0?totalProcG.toFixed(2)+' / ':''} ${totalM2G.toFixed(2)} m²
+            </div>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:.78rem">
+          <thead>
+            <tr style="background:#f0f0f0">
+              <th style="padding:.35rem .6rem;text-align:left;font-size:.6rem;letter-spacing:1px;text-transform:uppercase;color:#888;border-bottom:1px solid #ddd">#</th>
+              <th style="padding:.35rem .6rem;text-align:left;font-size:.6rem;letter-spacing:1px;text-transform:uppercase;color:#888;border-bottom:1px solid #ddd">Descripción</th>
+              <th style="padding:.35rem .6rem;text-align:right;font-size:.6rem;letter-spacing:1px;text-transform:uppercase;color:#888;border-bottom:1px solid #ddd">Piezas</th>
+              <th style="padding:.35rem .6rem;text-align:right;font-size:.6rem;letter-spacing:1px;text-transform:uppercase;color:#888;border-bottom:1px solid #ddd">M² Tot.</th>
+              <th style="padding:.35rem .6rem;text-align:right;font-size:.6rem;letter-spacing:1px;text-transform:uppercase;color:#888;border-bottom:1px solid #ddd">M² Proc.</th>
+              <th style="padding:.35rem .6rem;text-align:right;font-size:.6rem;letter-spacing:1px;text-transform:uppercase;color:#888;border-bottom:1px solid #ddd">En Planta</th>
+              <th style="padding:.35rem .6rem;font-size:.6rem;letter-spacing:1px;text-transform:uppercase;color:#888;border-bottom:1px solid #ddd">Avance</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`;
+  });
+
+  const html = `
+    <div class="rpt-doc">
+      <div class="rpt-header">
+        <div class="rpt-logo-block">
+          <div class="rpt-logo-sq">EY</div>
+          <div class="rpt-brand"><h1>EPOXIYA</h1><p>CALENDARIO DE PRODUCCIÓN</p></div>
+        </div>
+        <div class="rpt-meta">
+          <strong>Informe Diario de Producción</strong>
+          <div style="text-transform:capitalize">${fecha}</div>
+        </div>
+      </div>
+
+      <div class="rpt-inv-summary" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.2rem">
+        <div class="rpt-inv-kpi"><div class="kv">${groups.length}</div><div class="kl">Órdenes hoy</div></div>
+        <div class="rpt-inv-kpi"><div class="kv">${totalPiezas}</div><div class="kl">Piezas totales</div></div>
+        <div class="rpt-inv-kpi"><div class="kv">${totalM2Hoy.toFixed(2)}</div><div class="kl">M² planificados</div></div>
+        <div class="rpt-inv-kpi" style="${totalM2Proc>0?'background:#f0fdf4':''}">
+          <div class="kv" style="color:#166534">${totalM2Proc>0?totalM2Proc.toFixed(2):'—'}</div>
+          <div class="kl">M² procesados</div>
+        </div>
+      </div>
+
+      <!-- Avance general -->
+      <div style="background:#111;color:#fff;border-radius:10px;padding:.8rem 1.2rem;margin-bottom:1.2rem;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:.65rem;letter-spacing:2px;text-transform:uppercase;color:#aaa">Avance general del día</div>
+          <div style="font-family:'Bebas Neue',cursive;font-size:1.8rem;letter-spacing:2px;color:#e8c84a">${Math.round(avgAvance)}%</div>
+        </div>
+        <div style="flex:1;margin:0 1.5rem">
+          <div style="height:12px;background:#333;border-radius:6px;overflow:hidden">
+            <div style="height:100%;background:#e8c84a;width:${Math.round(avgAvance)}%;border-radius:6px"></div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.65rem;letter-spacing:2px;text-transform:uppercase;color:#aaa">M² procesados / planificados</div>
+          <div style="font-family:'Bebas Neue',cursive;font-size:1.1rem;color:#e8c84a">${totalM2Proc.toFixed(2)} / ${totalM2Hoy.toFixed(2)} m²</div>
+        </div>
+      </div>
+
+      ${cardsHtml}
+
+      <div class="rpt-footer">
+        <span>EPOXIYA — Informe de Producción</span>
+        <span>Generado: ${new Date().toLocaleString('es-AR')}</span>
+      </div>
+    </div>`;
+
+  openPrintWindow(html, 'Producción '+fecha);
 }
 
 // ════════════════════════════════════════
